@@ -26,6 +26,7 @@ data/
 .idea/
 *.swp
 *.swo
+.claude
 
 # macOS
 .DS_Store
