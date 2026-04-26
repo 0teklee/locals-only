@@ -1,3 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# 환경변수
 .env.*
+.env
+
+# 런타임 데이터
+data/
+*.db
+*.sqlite
+
+# 로그
+*.log
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# macOS
 .DS_Store
-node_modules
+.AppleDouble
+
+# Node
+node_modules/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/

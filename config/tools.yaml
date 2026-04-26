@@ -1,0 +1,51 @@
+# config/tools.yaml
+# 에이전트가 사용할 도구 활성화 목록
+
+tools:
+  file:
+    enabled: true
+    max_read_bytes: 102400   # 100KB
+
+  shell:
+    enabled: true
+    allowlist:
+      - git
+      - python3
+      - python
+      - pip
+      - pip3
+      - uv
+      - brew
+      - make
+      - cmake
+      - npm
+      - npx
+      - node
+      - cargo
+      - rustc
+      - ollama
+      - ls
+      - cat
+      - head
+      - tail
+      - grep
+      - find
+      - wc
+      - ruff
+      - pytest
+    default_timeout: 30     # 초
+    python_timeout:  60     # 초
+
+  git:
+    enabled: true
+
+  rag:
+    enabled: true
+    default_k: 5
+    max_tokens: 2000
+
+  model:
+    enabled: true
+
+  sys:
+    enabled: true

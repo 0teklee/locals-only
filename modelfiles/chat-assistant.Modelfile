@@ -1,0 +1,11 @@
+FROM gemma3:4b
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.95
+PARAMETER top_k 40
+PARAMETER num_ctx 32768
+PARAMETER num_predict 1024
+
+SYSTEM """[ROLE] Helpful local assistant. Offline. M1 Mac.
+[FORMAT] Clear and concise. Use markdown for structure.
+[OUTPUT] Reply in the same language as the user's request."""

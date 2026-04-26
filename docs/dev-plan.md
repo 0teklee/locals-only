@@ -2023,21 +2023,22 @@ export OLLAMA_KV_CACHE_TYPE=q8_0
 
 ## 14. 확장 로드맵
 
-### Phase 1 — 기반 구축 (CLI 우선)
-- [ ] `ModelAdapter` + `OllamaAdapter` 구현 (ChatResult, async I/O)
-- [ ] `ModelRegistry` (config/models.yaml 연동)
-- [ ] `ModelPool` (embed 고정 슬롯 + main 슬롯)
-- [ ] `ObservabilityBus` (async-safe)
-- [ ] `ToolRegistry` + 기본 도구 (file, shell, git)
-- [ ] `ContextBuilder` (list[Message] 반환, 타입 일관성)
-- [ ] `MemoryManager` (슬라이딩 윈도우 + SQLite)
-- [ ] **CLI 진입점** (`local-ai chat`, `local-ai code`, `local-ai models`)
+### Phase 1 — 기반 구축 (CLI 우선) ✅ 완료
+- [x] `ModelAdapter` + `OllamaAdapter` 구현 (ChatResult, async I/O)
+- [x] `ModelRegistry` (config/models.yaml 연동)
+- [x] `ModelPool` (embed 고정 슬롯 + main 슬롯)
+- [x] `ObservabilityBus` (async-safe)
+- [x] `ToolRegistry` + 기본 도구 (file, shell, git)
+- [x] `ContextBuilder` (list[Message] 반환, 타입 일관성)
+- [x] `MemoryManager` (슬라이딩 윈도우 + SQLite)
+- [x] **CLI 진입점** (`local-ai chat`, `local-ai code`, `local-ai models`)
+- [x] 단위 테스트 36개 (MockAdapter 기반, Ollama 불필요)
 
-### Phase 2 — RAG + 에이전트
-- [ ] `RAGPipeline` (임베딩 + MMR 검색 + 토큰 트런케이션)
-- [ ] `TaskDispatcher` (의도 분류 + 슬롯 라우팅)
-- [ ] `AgentRunner` (도구 호출 루프, ChatResult 기반)
-- [ ] 코드베이스 인덱싱 스크립트
+### Phase 2 — RAG + 에이전트 ✅ 완료
+- [x] `RAGPipeline` (임베딩 + MMR 검색 + 토큰 트런케이션)
+- [x] `TaskDispatcher` (의도 분류 + 슬롯 라우팅)
+- [x] `AgentRunner` (도구 호출 루프, ChatResult 기반)
+- [x] 코드베이스 인덱싱 스크립트
 - [ ] FastAPI 서버 (OpenAI 호환, 에디터 연동용)
 
 ### Phase 3 — 고도화
