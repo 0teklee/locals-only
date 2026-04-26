@@ -13,7 +13,7 @@ echo "[2/6] Python 가상환경 생성..."
 python3.12 -m venv .venv
 source .venv/bin/activate
 
-pip install --upgrade pip -q
+pip install --upgrade pip setuptools wheel -q
 
 pip install \
   "langchain>=0.3" "langchain-ollama>=0.2" "langchain-chroma>=0.1" \
