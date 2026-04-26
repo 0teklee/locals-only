@@ -2039,14 +2039,15 @@ export OLLAMA_KV_CACHE_TYPE=q8_0
 - [x] `TaskDispatcher` (의도 분류 + 슬롯 라우팅)
 - [x] `AgentRunner` (도구 호출 루프, ChatResult 기반)
 - [x] 코드베이스 인덱싱 스크립트
-- [ ] FastAPI 서버 (OpenAI 호환, 에디터 연동용)
+- [x] FastAPI 서버 (OpenAI 호환, 에디터 연동용)
 
-### Phase 3 — 고도화
-- [ ] LLM 요약 압축 (MemoryManager — 오래된 턴 요약)
-- [ ] 실시간 관측 대시보드 (SSE + 브라우저 UI)
-- [ ] 컨텍스트 덤프 + 분석 도구
-- [ ] 프로젝트별 컨텍스트 격리 (멀티 ChromaDB 컬렉션)
-- [ ] 자동 모델 선택 (쿼리 복잡도 기반)
+### Phase 3 — 고도화 ✅ 완료 (일부 스킵)
+- [x] LLM 요약 압축 (MemoryManager — 선택적, summarizer 주입 시 활성화)
+- [x] 실시간 관측 SSE (`GET /api/observe` + `local-ai observe`)
+- [x] 컨텍스트 덤프 (`DEBUG_DUMP_CONTEXT=true`, ContextBuilder 구현됨)
+- [x] 프로젝트별 컨텍스트 격리 (`--collection` param, RAGPipeline)
+- [-] 자동 모델 선택 (스킵 — TaskDispatcher 의도 분류로 이미 충족)
+- [-] 브라우저 UI (스킵 — SSE + CLI observe로 충분, 프론트엔드 빌드는 범위 초과)
 
 ### Phase 4 — 멀티 에이전트 (선택)
 - [ ] Planner + Executor 분리
