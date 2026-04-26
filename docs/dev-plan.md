@@ -1,7 +1,7 @@
 # M1 Mac Mini — White-Box Local AI Agent 설계서
 
-> **버전**: 2.0.0 | **환경**: Apple Silicon M1 (Mac Mini) | **네트워크**: 완전 오프라인(Air-gap)
-> **설계 원칙**: White-Box (투명·관측 가능) + Model-Agnostic (모델 무관) + Offline-First
+> **버전**: 2.1.0 | **환경**: Apple Silicon M1 (Mac Mini) | **네트워크**: 완전 오프라인(Air-gap)
+> **설계 원칙**: White-Box (투명·관측 가능) + Model-Agnostic (모델 무관) + Offline-First + CLI-First
 
 ---
 
@@ -21,6 +21,7 @@
 12. [에이전트 워크플로우](#12-에이전트-워크플로우)
 13. [성능 튜닝 파라미터](#13-성능-튜닝-파라미터)
 14. [확장 로드맵](#14-확장-로드맵)
+15. [효율성 검증 결과 (v2.1 개정 이유)](#15-효율성-검증-결과-v21-개정-이유)
 
 ---
 
@@ -29,9 +30,9 @@
 ### 목적
 
 외부 API 없이 M1 Mac Mini에서 완전 로컬로 동작하는 **투명한(white-box) AI 코딩 에이전트** 시스템 구축.
-어떤 Ollama 호환 모델이든 설정 변경만으로 교체 가능.
+어떤 Ollama 호환 모델이든 설정 변경만으로 교체 가능. **CLI 한 줄로 즉시 실행.**
 
-### 핵심 설계 철학 3가지
+### 핵심 설계 철학 4가지
 
 #### 1. White-Box (투명성)
 ```
@@ -59,17 +60,28 @@
 - LAN 네트워크에서 다른 기기 접근 가능
 ```
 
+#### 4. CLI-First (터미널 우선)
+```
+FastAPI 서버 실행 없이 CLI 단독으로 모든 기능 동작.
+- local-ai chat "질문"        → 즉시 대화
+- local-ai code "코드 작성"   → 코드 에이전트
+- local-ai index /path        → RAG 인덱싱
+- local-ai models list        → 모델 관리
+서버가 있으면 API·WebUI도 사용 가능 (선택적)
+```
+
 ### 핵심 요구사항
 
 | 요구사항 | 세부 내용 | 우선순위 |
 |---------|---------|---------|
+| **CLI 단독 실행** | 서버 없이 터미널에서 즉시 사용 | P0 |
 | **모델 무관 연동** | 어떤 Ollama 모델이든 설정만으로 교체 | P0 |
 | **파이프라인 투명성** | 모든 단계 관측·로깅·개입 가능 | P0 |
 | **오프라인 완전 동작** | 인터넷 없이 모든 기능 작동 | P0 |
+| **다중 LLM 오케스트레이션** | 용도별 모델 자동 라우팅·병렬 실행 | P1 |
 | **토큰 효율** | 컨텍스트 압축, 청킹, 캐싱 전략 | P1 |
 | **코드 에디터 연동** | Cline, Continue, Aider 등 | P1 |
 | **다중 인터페이스** | TUI, GUI(브라우저), API | P2 |
-| **에이전트 프레임워크** | 도구 호출, RAG, 멀티스텝 추론 | P2 |
 
 ---
 
@@ -97,6 +109,10 @@ SSD  : NVMe (고속 스왑, ~7GB/s)
 
 8GB 환경: 모델 ~4-5GB / KV ~1GB / OS ~2-3GB
 → 7B 모델 Q4 불가. 3B Q4 또는 7B Q2 권장
+
+다중 LLM 오케스트레이션 시 메모리 할당:
+  16GB: 메인 모델(7B, ~5GB) + 임베딩(270MB) + 스택(~3GB) ← 동시 로드 가능
+  8GB:  메인 모델(3B, ~2.5GB) + 임베딩(270MB) + 스택(~2GB) ← 임베딩만 병렬
 ```
 
 ### 메모리 절감 원칙
@@ -107,7 +123,7 @@ SSD  : NVMe (고속 스왑, ~7GB/s)
 | Flash Attention | KV 캐시 메모리 40% 절감 | `OLLAMA_FLASH_ATTENTION=1` |
 | KV 캐시 양자화 | `q8_0` 캐시 → 추가 20% 절감 | `OLLAMA_KV_CACHE_TYPE=q8_0` |
 | 컨텍스트 제한 | num_ctx=8192 기본 (모델 최대치 미사용) | Modelfile |
-| 단일 모델 상주 | 동시 2개 로드 시 스왑 발생 | `OLLAMA_MAX_LOADED_MODELS=1` |
+| 임베딩 전용 슬롯 | nomic-embed-text 항상 로드 유지 (270MB) | ModelPool 설계 |
 | Metal GPU 오프로드 | 모든 레이어 GPU 처리 | `-ngl 99` (자동) |
 
 ---
@@ -122,8 +138,8 @@ SSD  : NVMe (고속 스왑, ~7GB/s)
 | 범용 대화 | `gemma3:4b` | `gemma3:2b` | 3.3GB / 1.6GB | 128K | 다국어, 긴 컨텍스트 |
 | 에이전트 추론 | `qwen2.5:7b` | `qwen2.5:3b` | 4.7GB / 2.0GB | 128K | 도구 호출, ReAct |
 | 코드 리뷰 | `deepseek-coder:6.7b` | `deepseek-coder:1.3b` | 4.0GB / 0.8GB | 16K | 코드 이해력 우수 |
-| 빠른 완성 | `qwen2.5-coder:1.5b` | `qwen2.5-coder:1.5b` | 1.0GB | 32K | 탭 완성용 |
-| 임베딩 | `nomic-embed-text` | `nomic-embed-text` | 270MB | 8K | RAG 전용 |
+| 빠른 완성/분류 | `qwen2.5-coder:1.5b` | `qwen2.5-coder:1.5b` | 1.0GB | 32K | 탭 완성, 의도 분류 |
+| 임베딩 | `nomic-embed-text` | `nomic-embed-text` | 270MB | 8K | RAG 전용, 상시 로드 |
 | 백업/범용 | `mistral:7b` | `phi3:3.8b` | 4.1GB / 2.2GB | 32K / 128K | 범용 폴백 |
 
 > **새 모델 추가 방법**: `config/models.yaml`에 항목 추가만으로 즉시 사용 가능.
@@ -140,6 +156,7 @@ defaults:
   chat: gemma3:4b
   agent: qwen2.5:7b
   embed: nomic-embed-text
+  classifier: qwen2.5-coder:1.5b   # 의도 분류용 경량 모델
   fallback: mistral:7b
 
 # RAM 기반 자동 선택 (ModelRegistry가 참조)
@@ -148,11 +165,15 @@ profiles:
     code: qwen2.5-coder:3b
     chat: gemma3:2b
     agent: qwen2.5:3b
+    classifier: qwen2.5-coder:1.5b
+    embed: nomic-embed-text
 
   ram_16gb:
     code: qwen2.5-coder:7b
     chat: gemma3:4b
     agent: qwen2.5:7b
+    classifier: qwen2.5-coder:1.5b
+    embed: nomic-embed-text
 
 # 모델별 파라미터 프리셋
 presets:
@@ -181,6 +202,17 @@ presets:
     num_predict: 1024
     system_prompt: "modelfiles/agent-tools.Modelfile"
 
+  qwen2.5-coder:1.5b:
+    temperature: 0.0   # 분류는 결정론적으로
+    top_p: 0.9
+    top_k: 10
+    num_ctx: 2048
+    num_predict: 64
+
+  nomic-embed-text:
+    # 임베딩 전용 — num_ctx만 관리
+    num_ctx: 8192
+
   # 새 모델 추가 예시
   llama3.2:3b:
     temperature: 0.5
@@ -191,22 +223,16 @@ presets:
 ### 3.3 GGUF 직접 등록 (오프라인 환경)
 
 ```bash
-# Hugging Face에서 사전 다운로드 후 Ollama에 직접 등록
-# 인터넷 연결 가능한 환경에서 먼저 실행
-
 # 방법 A: ollama pull (간편)
 ollama pull qwen2.5-coder:7b
 ollama pull nomic-embed-text
 
-# 방법 B: GGUF 파일 직접 등록 (오프라인 이전 후)
-# 1) Hugging Face에서 .gguf 파일 다운로드
-# 2) Modelfile 작성
+# 방법 B: GGUF 파일 직접 등록
 cat > /tmp/Modelfile << 'EOF'
 FROM /path/to/model.gguf
 PARAMETER temperature 0.1
 PARAMETER num_ctx 8192
 EOF
-# 3) ollama create로 등록
 ollama create my-custom-model -f /tmp/Modelfile
 
 # 방법 C: scripts/import-gguf.sh 사용
@@ -223,9 +249,9 @@ ollama create my-custom-model -f /tmp/Modelfile
 ┌──────────────────────────────────────────────────────────────┐
 │                    L4: Interface Layer                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
-│  │  VS Code │  │  Neovim  │  │ Browser  │  │  Terminal   │  │
-│  │(Cline/   │  │(Avante/  │  │(Open     │  │ (Aider/TUI) │  │
-│  │Continue) │  │CodeComp) │  │ WebUI)   │  │             │  │
+│  │  CLI     │  │  VS Code │  │ Browser  │  │  Terminal   │  │
+│  │(Typer)   │  │(Cline/   │  │(Open     │  │ (Aider/TUI) │  │
+│  │★ 메인    │  │Continue) │  │ WebUI)   │  │             │  │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬──────┘  │
 └───────┼─────────────┼─────────────┼────────────────┼─────────┘
         │             │             │                │
@@ -235,22 +261,24 @@ ollama create my-custom-model -f /tmp/Modelfile
 ┌──────────────────────────────────────────────────────────────┐
 │                 L3: Orchestration Layer                        │
 │  ┌──────────────────┐    ┌──────────────────────────────────┐ │
-│  │   FastAPI Server  │    │      AgentRunner                │ │
+│  │   FastAPI Server  │    │      TaskDispatcher             │ │
 │  │   (port: 8080)    │    │  ┌────────────┐                 │ │
-│  │  /v1/chat         │───▶│  │IntentClass │ 의도 분류       │ │
+│  │  /v1/chat         │───▶│  │IntentClass │ 의도→모델 라우팅 │ │
 │  │  /v1/completions  │    │  ├────────────┤                 │ │
-│  │  /api/switch-model│    │  │ContextBuild│ 토큰 예산 조립  │ │
+│  │  /api/switch-model│    │  │ModelPool   │ 슬롯 할당·반환  │ │
 │  │  /api/observe     │    │  ├────────────┤                 │ │
-│  └──────────────────┘    │  │ToolRouter  │ 도구 실행 루프  │ │
+│  └──────────────────┘    │  │AgentRunner │ 도구 호출 루프  │ │
 │                           │  ├────────────┤                 │ │
-│  ┌──────────────────┐    │  │MemoryMgr   │ 히스토리 관리   │ │
-│  │ ObservabilityBus  │◀──│  └────────────┘                 │ │
-│  │  (port: 8090/SSE) │    └──────────────────────────────────┘ │
-│  │  실시간 파이프라인  │                   │                     │
-│  │  이벤트 스트림     │                   ▼                     │
-│  └──────────────────┘    ┌──────────────────────────────────┐ │
+│  ┌──────────────────┐    │  │ContextBuild│ 토큰 예산 조립  │ │
+│  │ ObservabilityBus  │◀──│  ├────────────┤                 │ │
+│  │  (SSE /api/obs)   │    │  │MemoryMgr   │ 히스토리 관리   │ │
+│  │  실시간 이벤트     │    │  └────────────┘                 │ │
+│  └──────────────────┘    └──────────────────────────────────┘ │
+│                                       │                        │
+│                                       ▼                        │
+│                           ┌──────────────────────────────────┐ │
 │                           │       RAGPipeline                │ │
-│                           │  Embed → Search → Compress       │ │
+│                           │  Embed → Search → Truncate       │ │
 │                           └──────────────────────────────────┘ │
 └───────────────────────────────────┬──────────────────────────┘
                                     │ HTTP (localhost:11434)
@@ -258,16 +286,17 @@ ollama create my-custom-model -f /tmp/Modelfile
 ┌──────────────────────────────────────────────────────────────┐
 │                    L2: Model Layer                             │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │                  ModelAdapter                           │  │
-│  │  ┌─────────────┐    ┌──────────────┐                  │  │
-│  │  │ModelRegistry│    │ OllamaClient │                  │  │
-│  │  │ (모델 목록)  │    │ (HTTP 래퍼)  │                  │  │
-│  │  └─────────────┘    └──────────────┘                  │  │
+│  │                  ModelPool (다중 LLM 관리)              │  │
+│  │  ┌──────────────────────────────────────────────────┐  │  │
+│  │  │ 슬롯 A: 메인 모델 (code/chat/agent, 필요 시 교체) │  │  │
+│  │  │ 슬롯 B: 임베딩 모델 (nomic-embed-text, 상시 고정) │  │  │
+│  │  └──────────────────────────────────────────────────┘  │  │
+│  │  ModelRegistry (RAM 기반 모델 선택)                     │  │
+│  │  OllamaAdapter (HTTP 래퍼 + white-box 로깅)            │  │
 │  └────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │                  Ollama Server (11434)                  │  │
 │  │   /api/chat  /api/generate  /v1/*  /api/embed          │  │
-│  │   ← 어떤 GGUF 모델이든 런타임 교체 가능 →              │  │
 │  └────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────┬──────────────────────────┘
                                     │
@@ -290,13 +319,17 @@ ollama create my-custom-model -f /tmp/Modelfile
 ```
 각 ● 지점에서 이벤트가 ObservabilityBus로 발행됨
 
-사용자 입력 ●─→ [IntentClassifier] ●─→ [ContextBuilder] ●
-                                                          │
-        ┌─────────────────────────────────────────────────┘
+사용자 입력 ●─→ [IntentClassifier] ●─→ [TaskDispatcher] ●
+                    (1.5b 경량 모델)      (모델 슬롯 할당)
+                                                 │
+        ┌────────────────────────────────────────┘
         ▼
-[ModelAdapter.chat()] ●─────────────────────────── 토큰 수, 지연 시간
+[ContextBuilder] ●─────────────────────────── 토큰 예산 계산
         │
-        ▼ (tool_call 감지)
+        ▼
+[ModelAdapter.chat()] ●──────────────────── 토큰 수, 지연 시간
+        │
+        ▼ (tool_calls 감지 — 스트림 완료 후 final chunk에서)
 [ToolRouter] ●─→ [Tool 실행] ●─→ 결과 반환 ─→ 재순환
         │
         ▼ (최종 응답)
@@ -313,7 +346,7 @@ ollama create my-custom-model -f /tmp/Modelfile
 # src/models/adapter.py
 from __future__ import annotations
 from typing import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
 
@@ -330,8 +363,26 @@ class ModelInfo:
 class Message:
     role: str  # "system" | "user" | "assistant" | "tool"
     content: str
-    tool_calls: list[dict] | None = None
-    tool_call_id: str | None = None
+    tool_calls: list[dict] | None = field(default=None)
+    tool_call_id: str | None = field(default=None)
+
+    def to_dict(self) -> dict:
+        d: dict = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            d["tool_calls"] = self.tool_calls
+        if self.tool_call_id:
+            d["tool_call_id"] = self.tool_call_id
+        return d
+
+
+@dataclass
+class ChatResult:
+    """chat() 호출의 최종 결과 (스트리밍 완료 후)"""
+    content: str
+    tool_calls: list[dict]          # Ollama tool_calls 필드
+    input_tokens: int
+    output_tokens: int
+    elapsed_sec: float
 
 
 class ModelAdapterBase(ABC):
@@ -343,7 +394,10 @@ class ModelAdapterBase(ABC):
         messages: list[Message],
         *,
         stream: bool = True,
-    ) -> AsyncIterator[str]: ...
+        on_token: "Callable[[str], None] | None" = None,
+    ) -> ChatResult: ...
+    # ↑ 스트리밍은 on_token 콜백으로 처리.
+    #   반환값은 항상 ChatResult (tool_calls 포함).
 
     @abstractmethod
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
@@ -355,21 +409,23 @@ class ModelAdapterBase(ABC):
     async def switch_model(self, model_name: str) -> None: ...
 
     @abstractmethod
-    def get_current_model(self) -> ModelInfo: ...
+    def get_current_model(self) -> str: ...
 ```
 
-### 5.2 OllamaAdapter 구현 (white-box 로깅 포함)
+### 5.2 OllamaAdapter 구현 (수정: async I/O, 올바른 tool_call 감지)
 
 ```python
 # src/models/ollama_adapter.py
 import time
 import json
+import uuid
 import asyncio
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
+from collections.abc import Callable
 
 import httpx
-from src.models.adapter import ModelAdapterBase, Message, ModelInfo
+from src.models.adapter import ModelAdapterBase, Message, ModelInfo, ChatResult
 from src.observe.bus import ObservabilityBus
 from src.config import settings
 
@@ -379,6 +435,8 @@ class OllamaAdapter(ModelAdapterBase):
     Ollama HTTP API 래퍼.
     - 모든 호출에 자동 로깅 (white-box)
     - 모델은 외부 설정에서 결정 (model-agnostic)
+    - tool_calls는 Ollama 스트림 done 청크에서 추출
+    - 파일 I/O는 asyncio.to_thread()로 이벤트 루프 블로킹 방지
     """
 
     def __init__(
@@ -399,39 +457,82 @@ class OllamaAdapter(ModelAdapterBase):
         messages: list[Message],
         *,
         stream: bool = True,
-    ) -> AsyncIterator[str]:
+        on_token: Callable[[str], None] | None = None,
+    ) -> ChatResult:
         payload = {
             "model": self._model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
-            "stream": stream,
+            "messages": [m.to_dict() for m in messages],
+            "stream": True,   # 항상 스트리밍 (토큰 단위 처리)
             "options": self._params,
         }
 
-        # White-box: 호출 전 로그
-        call_id = self._log_call_start(payload, messages)
+        call_id = str(uuid.uuid4())[:8]
         start_time = time.monotonic()
+        await self._log_async(self._build_start_log(call_id, messages))
+        self._obs.emit("llm_call_start", {"id": call_id, "model": self._model})
+
+        output_parts: list[str] = []
+        tool_calls: list[dict] = []
+        eval_count = 0
+        prompt_eval_count = 0
 
         async with httpx.AsyncClient(timeout=180) as client:
-            async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as resp:
+            async with client.stream(
+                "POST", f"{self.base_url}/api/chat", json=payload
+            ) as resp:
                 resp.raise_for_status()
-                output_tokens = 0
                 async for line in resp.aiter_lines():
                     if not line:
                         continue
                     chunk = json.loads(line)
-                    if token := chunk.get("message", {}).get("content", ""):
-                        output_tokens += 1
-                        yield token
+                    msg = chunk.get("message", {})
+
+                    # 텍스트 토큰 스트리밍
+                    if token := msg.get("content", ""):
+                        output_parts.append(token)
+                        if on_token:
+                            on_token(token)
+
+                    # done 청크에서 tool_calls 추출 (Ollama 실제 API 형식)
                     if chunk.get("done"):
-                        # White-box: 완료 후 로그
-                        elapsed = time.monotonic() - start_time
-                        self._log_call_end(call_id, output_tokens, elapsed, chunk)
+                        tool_calls = msg.get("tool_calls") or []
+                        eval_count = chunk.get("eval_count", 0)
+                        prompt_eval_count = chunk.get("prompt_eval_count", 0)
+
+        elapsed = time.monotonic() - start_time
+        result = ChatResult(
+            content="".join(output_parts),
+            tool_calls=tool_calls,
+            input_tokens=prompt_eval_count,
+            output_tokens=eval_count,
+            elapsed_sec=round(elapsed, 3),
+        )
+        await self._log_async(self._build_end_log(call_id, result))
+        self._obs.emit("llm_call_end", {
+            "id": call_id,
+            "output_tokens": result.output_tokens,
+            "elapsed_sec": result.elapsed_sec,
+            "tokens_per_sec": round(result.output_tokens / elapsed, 1) if elapsed > 0 else 0,
+            "has_tool_calls": bool(tool_calls),
+        })
+        return result
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/embed",
+                json={"model": self._model, "input": texts},
+            )
+            resp.raise_for_status()
+            return resp.json()["embeddings"]
 
     async def switch_model(self, model_name: str) -> None:
-        """런타임 모델 교체 — 재시작 불필요"""
         self._model = model_name
         self._params = settings.get_model_params(model_name)
-        self._obs.emit("model_switched", {"model": model_name, "params": self._params})
+        self._obs.emit("model_switched", {"model": model_name})
+
+    def get_current_model(self) -> str:
+        return self._model
 
     async def list_models(self) -> list[ModelInfo]:
         async with httpx.AsyncClient() as client:
@@ -448,10 +549,19 @@ class OllamaAdapter(ModelAdapterBase):
             for m in data.get("models", [])
         ]
 
-    def _log_call_start(self, payload: dict, messages: list[Message]) -> str:
-        import uuid
-        call_id = str(uuid.uuid4())[:8]
-        entry = {
+    # --- Private helpers ---
+
+    async def _log_async(self, entry: dict) -> None:
+        """이벤트 루프를 블로킹하지 않는 비동기 파일 로그"""
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        await asyncio.to_thread(self._write_log, line)
+
+    def _write_log(self, line: str) -> None:
+        with open(self._log_path, "a") as f:
+            f.write(line)
+
+    def _build_start_log(self, call_id: str, messages: list[Message]) -> dict:
+        return {
             "id": call_id,
             "type": "llm_call_start",
             "model": self._model,
@@ -460,25 +570,19 @@ class OllamaAdapter(ModelAdapterBase):
             "params": self._params,
             "timestamp": time.time(),
         }
-        with open(self._log_path, "a") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        self._obs.emit("llm_call_start", entry)
-        return call_id
 
-    def _log_call_end(self, call_id: str, output_tokens: int, elapsed: float, raw: dict) -> None:
-        entry = {
+    def _build_end_log(self, call_id: str, result: ChatResult) -> dict:
+        return {
             "id": call_id,
             "type": "llm_call_end",
-            "output_tokens": output_tokens,
-            "elapsed_sec": round(elapsed, 3),
-            "tokens_per_sec": round(output_tokens / elapsed, 1) if elapsed > 0 else 0,
-            "eval_count": raw.get("eval_count", 0),
-            "prompt_eval_count": raw.get("prompt_eval_count", 0),
+            "output_tokens": result.output_tokens,
+            "input_tokens": result.input_tokens,
+            "elapsed_sec": result.elapsed_sec,
+            "tokens_per_sec": round(result.output_tokens / result.elapsed_sec, 1)
+            if result.elapsed_sec > 0 else 0,
+            "has_tool_calls": bool(result.tool_calls),
             "timestamp": time.time(),
         }
-        with open(self._log_path, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-        self._obs.emit("llm_call_end", entry)
 ```
 
 ### 5.3 ModelRegistry — 런타임 모델 탐색
@@ -488,7 +592,6 @@ class OllamaAdapter(ModelAdapterBase):
 import psutil
 import yaml
 from pathlib import Path
-from src.models.adapter import ModelInfo
 
 
 class ModelRegistry:
@@ -503,42 +606,199 @@ class ModelRegistry:
 
     def get_default(self, purpose: str) -> str:
         """
-        purpose: "code" | "chat" | "agent" | "embed"
+        purpose: "code" | "chat" | "agent" | "embed" | "classifier"
         RAM에 따라 자동 선택
         """
         ram_gb = psutil.virtual_memory().total / 1e9
-        if ram_gb >= 14:
-            profile = "ram_16gb"
-        else:
-            profile = "ram_8gb"
-
+        profile = "ram_16gb" if ram_gb >= 14 else "ram_8gb"
         return (
             self._config["profiles"].get(profile, {}).get(purpose)
             or self._config["defaults"][purpose]
         )
 
     def get_params(self, model_name: str) -> dict:
-        """모델별 파라미터 반환. 등록 안 된 모델은 기본값 사용."""
         return self._config["presets"].get(model_name, self._config.get("default_params", {}))
 
     def list_supported(self) -> list[str]:
         return list(self._config["presets"].keys())
 ```
 
+### 5.4 ModelPool — 다중 LLM 슬롯 관리 (신규)
+
+```python
+# src/models/pool.py
+import asyncio
+from dataclasses import dataclass, field
+from src.models.ollama_adapter import OllamaAdapter
+from src.models.registry import ModelRegistry
+from src.observe.bus import ObservabilityBus
+
+
+@dataclass
+class ModelSlot:
+    purpose: str              # "main" | "embed"
+    adapter: OllamaAdapter
+    locked: bool = False      # 현재 사용 중 여부
+
+
+class ModelPool:
+    """
+    다중 LLM 슬롯 관리자.
+
+    슬롯 구성:
+      - embed 슬롯: nomic-embed-text 상시 고정 (270MB, 교체 안 함)
+      - main 슬롯:  요청 의도에 따라 code/chat/agent 모델로 전환
+
+    RAM 절감 원칙:
+      - 8GB:  main 1개 + embed 1개 동시 가능 (합계 ~3GB)
+      - 16GB: main 1개 + embed 1개 동시 가능 (합계 ~6GB)
+      - main 슬롯의 모델 전환은 직렬 (Ollama가 자동 언로드)
+    """
+
+    def __init__(self, registry: ModelRegistry, obs: ObservabilityBus):
+        self._registry = registry
+        self._obs = obs
+        self._slots: dict[str, ModelSlot] = {}
+        self._lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        """시작 시 슬롯 초기화 — embed 슬롯은 고정 로드"""
+        embed_model = self._registry.get_default("embed")
+        main_model = self._registry.get_default("code")  # 초기값
+
+        self._slots["embed"] = ModelSlot(
+            purpose="embed",
+            adapter=OllamaAdapter(model=embed_model, obs_bus=self._obs),
+        )
+        self._slots["main"] = ModelSlot(
+            purpose="main",
+            adapter=OllamaAdapter(model=main_model, obs_bus=self._obs),
+        )
+        self._obs.emit("pool_initialized", {
+            "embed": embed_model,
+            "main": main_model,
+        })
+
+    async def acquire(self, purpose: str) -> OllamaAdapter:
+        """
+        슬롯 획득. purpose에 맞는 모델로 전환 후 반환.
+        동시에 같은 슬롯 요청이 오면 대기.
+        """
+        slot_key = "embed" if purpose == "embed" else "main"
+
+        async with self._lock:
+            slot = self._slots[slot_key]
+            while slot.locked:
+                # 슬롯이 사용 중이면 100ms 대기 후 재시도
+                await asyncio.sleep(0.1)
+
+            # main 슬롯: 목적에 맞는 모델로 전환 필요 시 전환
+            if slot_key == "main":
+                target_model = self._registry.get_default(purpose)
+                if slot.adapter.get_current_model() != target_model:
+                    await slot.adapter.switch_model(target_model)
+
+            slot.locked = True
+            return slot.adapter
+
+    async def release(self, purpose: str) -> None:
+        slot_key = "embed" if purpose == "embed" else "main"
+        async with self._lock:
+            self._slots[slot_key].locked = False
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """임베딩은 embed 슬롯 직접 사용 (acquire/release 없이)"""
+        return await self._slots["embed"].adapter.embed(texts)
+```
+
+### 5.5 TaskDispatcher — 의도 기반 모델 라우팅 (신규)
+
+```python
+# src/agent/dispatcher.py
+import asyncio
+import json
+from src.models.pool import ModelPool
+from src.models.adapter import Message
+from src.observe.bus import ObservabilityBus
+
+
+INTENT_PROMPT = """\
+Classify the user request into ONE category. Reply with JSON only.
+Categories: code_gen, code_review, file_edit, chat, rag_query, system
+
+Request: {query}
+
+Reply format: {"intent": "<category>", "confidence": 0.0-1.0}"""
+
+
+class TaskDispatcher:
+    """
+    사용자 요청을 의도 분류 → 적절한 모델 슬롯으로 라우팅.
+    의도 분류 자체는 경량 모델(1.5b)로 수행하여 오버헤드 최소화.
+    """
+
+    INTENT_TO_PURPOSE: dict[str, str] = {
+        "code_gen":     "code",
+        "code_review":  "code",
+        "file_edit":    "agent",
+        "chat":         "chat",
+        "rag_query":    "chat",
+        "system":       "agent",
+    }
+
+    def __init__(self, pool: ModelPool, obs: ObservabilityBus):
+        self._pool = pool
+        self._obs = obs
+
+    async def classify(self, user_input: str) -> str:
+        """경량 모델로 의도 분류. 실패 시 'chat' 폴백."""
+        adapter = await self._pool.acquire("classifier")
+        try:
+            result = await adapter.chat(
+                [Message(role="user", content=INTENT_PROMPT.format(query=user_input[:200]))],
+                stream=False,
+            )
+            data = json.loads(result.content.strip())
+            intent = data.get("intent", "chat")
+        except Exception:
+            intent = "chat"
+        finally:
+            await self._pool.release("classifier")
+
+        self._obs.emit("intent_classified", {"intent": intent, "input": user_input[:100]})
+        return intent
+
+    async def dispatch(self, user_input: str) -> tuple[str, "OllamaAdapter"]:
+        """
+        의도 분류 + 슬롯 할당을 동시에 처리.
+        Returns: (intent, adapter)
+        """
+        intent = await self.classify(user_input)
+        purpose = self.INTENT_TO_PURPOSE.get(intent, "chat")
+        adapter = await self._pool.acquire(purpose)
+        return intent, adapter
+
+    async def release(self, intent: str) -> None:
+        purpose = self.INTENT_TO_PURPOSE.get(intent, "chat")
+        await self._pool.release(purpose)
+```
+
 ---
 
 ## 6. 컴포넌트별 상세 설계
 
-### 6.1 AgentRunner — 도구 호출 루프
+### 6.1 AgentRunner — 도구 호출 루프 (수정: 올바른 tool_calls 처리)
 
 ```python
 # src/agent/runner.py
 import asyncio
 import json
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
-from src.models.adapter import ModelAdapterBase, Message
+from src.models.adapter import ModelAdapterBase, Message, ChatResult
+from src.models.pool import ModelPool
+from src.agent.dispatcher import TaskDispatcher
 from src.tools.registry import ToolRegistry
 from src.context.builder import ContextBuilder
 from src.memory.manager import MemoryManager
@@ -548,71 +808,119 @@ from src.observe.bus import ObservabilityBus
 class AgentRunner:
     """
     White-Box 에이전트 실행 루프.
-    각 단계는 ObservabilityBus를 통해 외부에서 관측 가능.
+
+    핵심 수정사항:
+    - tool_calls는 스트리밍 텍스트에서 감지하지 않음
+    - ChatResult.tool_calls (Ollama done 청크의 message.tool_calls)에서 추출
+    - 스트리밍 출력은 on_token 콜백으로 처리
     """
 
     MAX_ITERATIONS = 10
 
     def __init__(
         self,
-        adapter: ModelAdapterBase,
+        pool: ModelPool,
+        dispatcher: TaskDispatcher,
         tool_registry: ToolRegistry,
         context_builder: ContextBuilder,
         memory: MemoryManager,
         obs: ObservabilityBus,
     ):
-        self._adapter = adapter
+        self._pool = pool
+        self._dispatcher = dispatcher
         self._tools = tool_registry
         self._ctx = context_builder
         self._memory = memory
         self._obs = obs
 
-    async def run(self, user_input: str) -> AsyncIterator[str]:
-        # 단계 1: 컨텍스트 조립
-        self._obs.emit("step", {"name": "context_build", "status": "start"})
-        messages = await self._ctx.build(user_input)
-        self._obs.emit("step", {"name": "context_build", "status": "done",
-                                "token_budget": self._ctx.last_budget})
+    async def run(
+        self,
+        user_input: str,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
+        """
+        on_token: 스트리밍 토큰을 받을 콜백 (CLI 출력 등)
+        반환값: 최종 응답 전문
+        """
+        # 1. 의도 분류 + 슬롯 할당
+        self._obs.emit("step", {"name": "dispatch", "status": "start"})
+        intent, adapter = await self._dispatcher.dispatch(user_input)
+        self._obs.emit("step", {"name": "dispatch", "status": "done", "intent": intent})
 
-        # 도구 호출 루프
-        for iteration in range(self.MAX_ITERATIONS):
-            self._obs.emit("step", {"name": "llm_call", "iteration": iteration})
+        try:
+            # 2. 컨텍스트 조립
+            self._obs.emit("step", {"name": "context_build", "status": "start"})
+            messages = await self._ctx.build(user_input)
+            self._obs.emit("step", {
+                "name": "context_build",
+                "status": "done",
+                "budget": self._ctx.last_budget,
+            })
 
             full_response = ""
-            tool_calls = []
 
-            async for chunk in self._adapter.chat(messages):
-                # tool_call JSON 감지
-                if chunk.startswith('{"tool_call":'):
-                    tool_calls.append(json.loads(chunk))
-                else:
-                    full_response += chunk
-                    yield chunk  # 스트리밍 출력
+            # 3. 도구 호출 루프
+            for iteration in range(self.MAX_ITERATIONS):
+                self._obs.emit("step", {"name": "llm_call", "iteration": iteration})
 
-            if not tool_calls:
-                # 최종 응답 — 루프 종료
-                break
+                result: ChatResult = await adapter.chat(
+                    messages,
+                    on_token=on_token,
+                )
+                full_response = result.content
 
-            # 단계 N: 도구 실행
-            for tc in tool_calls:
-                self._obs.emit("step", {"name": "tool_call",
-                                        "tool": tc["name"], "args": tc["args"]})
-                result = await self._tools.execute(tc["name"], tc["args"])
-                self._obs.emit("step", {"name": "tool_result",
-                                        "tool": tc["name"], "result_size": len(str(result))})
+                # tool_calls가 없으면 최종 응답 — 루프 종료
+                if not result.tool_calls:
+                    break
 
-                messages.append(Message(role="tool", content=str(result),
-                                        tool_call_id=tc.get("id")))
+                # assistant 메시지 추가 (tool_calls 포함)
+                messages.append(Message(
+                    role="assistant",
+                    content=result.content,
+                    tool_calls=result.tool_calls,
+                ))
 
-        # 메모리 업데이트
+                # 각 도구 실행
+                for tc in result.tool_calls:
+                    fn = tc.get("function", {})
+                    tool_name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+
+                    self._obs.emit("step", {
+                        "name": "tool_call",
+                        "tool": tool_name,
+                        "args": args,
+                    })
+                    tool_result = await self._tools.execute(tool_name, args)
+                    self._obs.emit("step", {
+                        "name": "tool_result",
+                        "tool": tool_name,
+                        "result_size": len(str(tool_result)),
+                    })
+
+                    messages.append(Message(
+                        role="tool",
+                        content=str(tool_result),
+                        tool_call_id=tc.get("id"),
+                    ))
+
+        finally:
+            await self._dispatcher.release(intent)
+
+        # 4. 메모리 업데이트
         await self._memory.update(user_input, full_response)
+        return full_response
 ```
 
-### 6.2 ContextBuilder — 토큰 예산 관리
+### 6.2 ContextBuilder — 토큰 예산 관리 (수정: 타입 일관성)
 
 ```python
 # src/context/builder.py
 from dataclasses import dataclass
+from src.models.adapter import Message
 from src.memory.manager import MemoryManager
 from src.rag.pipeline import RAGPipeline
 
@@ -633,8 +941,8 @@ class TokenBudget:
 
 class ContextBuilder:
     """
-    토큰 예산을 관리하며 최적의 컨텍스트를 조립.
-    각 슬롯이 예산을 초과하면 자동 압축.
+    토큰 예산을 관리하며 Message 객체 리스트를 반환.
+    반환 타입은 항상 list[Message] — dict 혼용 금지.
     """
 
     DEFAULT_BUDGET = TokenBudget(
@@ -650,41 +958,43 @@ class ContextBuilder:
         self,
         memory: MemoryManager,
         rag: RAGPipeline,
+        system_prompt: str = "",
         budget: TokenBudget | None = None,
     ):
         self._memory = memory
         self._rag = rag
+        self._system_prompt = system_prompt
         self.budget = budget or self.DEFAULT_BUDGET
         self.last_budget: dict = {}
 
-    async def build(self, user_input: str) -> list:
-        messages = []
+    async def build(self, user_input: str) -> list[Message]:
+        messages: list[Message] = []
 
-        # 1. 시스템 프롬프트 (최대 budget.system 토큰)
-        system = self._get_system_prompt()
-        messages.append({"role": "system", "content": system[:self.budget.system * 4]})
+        # 1. 시스템 프롬프트 (최대 budget.system 토큰 × 4자)
+        if self._system_prompt:
+            truncated = self._system_prompt[: self.budget.system * 4]
+            messages.append(Message(role="system", content=truncated))
 
-        # 2. 대화 히스토리 (압축 적용)
-        history = await self._memory.get_compressed(max_tokens=self.budget.history)
+        # 2. 대화 히스토리 (슬라이딩 윈도우 + 요약)
+        history: list[Message] = await self._memory.get_compressed(
+            max_tokens=self.budget.history
+        )
         messages.extend(history)
 
-        # 3. RAG 컨텍스트 (검색 + 압축)
-        rag_ctx = await self._rag.search_and_compress(user_input, max_tokens=self.budget.rag)
+        # 3. RAG 컨텍스트 (토큰 예산 내 단순 트런케이션)
+        rag_ctx = await self._rag.search(user_input, max_tokens=self.budget.rag)
         if rag_ctx:
-            messages.append({"role": "system", "content": f"[Context]\n{rag_ctx}"})
+            messages.append(Message(role="system", content=f"[Context]\n{rag_ctx}"))
 
         # 4. 현재 입력
-        messages.append({"role": "user", "content": user_input})
+        messages.append(Message(role="user", content=user_input))
 
-        # White-box: 예산 현황 기록
         self.last_budget = {
-            "system_tokens": len(system.split()),
+            "system_tokens": len(self._system_prompt.split()) if self._system_prompt else 0,
             "history_messages": len(history),
             "rag_tokens": len(rag_ctx.split()) if rag_ctx else 0,
             "input_tokens": len(user_input.split()),
-            "remaining": self.budget.remaining,
         }
-
         return messages
 ```
 
@@ -692,9 +1002,11 @@ class ContextBuilder:
 
 ```python
 # src/tools/registry.py
+import time
+import asyncio
+import inspect
 from typing import Callable, Any
 from dataclasses import dataclass
-import json
 
 from src.observe.bus import ObservabilityBus
 
@@ -705,14 +1017,11 @@ class ToolSpec:
     description: str
     parameters: dict  # JSON Schema
     handler: Callable
-    requires_confirm: bool = False  # 파괴적 작업 여부
+    requires_confirm: bool = False
 
 
 class ToolRegistry:
-    """
-    런타임에 도구를 등록/탐색/실행.
-    도구 추가: register() 호출만으로 완료.
-    """
+    """런타임에 도구를 등록/탐색/실행."""
 
     def __init__(self, obs: ObservabilityBus):
         self._tools: dict[str, ToolSpec] = {}
@@ -740,43 +1049,48 @@ class ToolRegistry:
         if not spec:
             return f"Error: unknown tool '{name}'"
 
-        start = __import__("time").monotonic()
+        start = time.monotonic()
         try:
-            result = await spec.handler(**args) if __import__("asyncio").iscoroutinefunction(spec.handler) \
-                else spec.handler(**args)
+            if inspect.iscoroutinefunction(spec.handler):
+                result = await spec.handler(**args)
+            else:
+                result = await asyncio.to_thread(spec.handler, **args)
         except Exception as e:
             result = f"Error: {e}"
 
-        elapsed = __import__("time").monotonic() - start
+        elapsed = time.monotonic() - start
         self._obs.emit("tool_executed", {
             "name": name,
-            "args": args,
             "elapsed_sec": round(elapsed, 3),
             "result_size": len(str(result)),
         })
         return result
 ```
 
-### 6.4 RAGPipeline
+### 6.4 RAGPipeline (수정: LLM 압축 제거 → 토큰 트런케이션)
 
 ```python
 # src/rag/pipeline.py
+"""
+v2.1 변경사항:
+  LLMChainExtractor(contextual compression) 제거.
+  이유: 청크당 추가 LLM 호출 → M1 8GB에서 심각한 지연 + 메모리 압박.
+  대안: 토큰 수 기반 트런케이션 + MMR 다양성 검색으로 충분한 품질 확보.
+"""
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import DirectoryLoader
-from langchain.retrievers.document_compressors import LLMChainExtractor
-from langchain.retrievers import ContextualCompressionRetriever
 from src.config import settings
 
 
 class RAGPipeline:
     """
     임베딩 모델도 model-agnostic — config에서 교체 가능.
-    검색 후 자동 압축으로 토큰 절감.
+    압축은 LLM 없이 토큰 기반 트런케이션으로 처리.
     """
 
-    def __init__(self, llm, embed_model: str | None = None):
+    def __init__(self, embed_model: str | None = None):
         self._embed_model = embed_model or settings.EMBED_MODEL
         self._embeddings = OllamaEmbeddings(
             model=self._embed_model,
@@ -787,7 +1101,6 @@ class RAGPipeline:
             embedding_function=self._embeddings,
             persist_directory=settings.CHROMA_PATH,
         )
-        self._compressor = LLMChainExtractor.from_llm(llm)
 
     def index_codebase(self, path: str) -> int:
         loader = DirectoryLoader(
@@ -806,107 +1119,285 @@ class RAGPipeline:
         self._vectordb.add_documents(chunks)
         return len(chunks)
 
-    async def search_and_compress(self, query: str, max_tokens: int = 2000) -> str:
-        # MMR 검색 (다양성 + 관련성 균형)
+    async def search(self, query: str, max_tokens: int = 2000) -> str:
+        """
+        MMR 검색 후 토큰 예산 내 조합.
+        LLM 압축 없음 — 추가 모델 호출 없이 빠른 반환.
+        """
         retriever = self._vectordb.as_retriever(
             search_type="mmr",
-            search_kwargs={"k": 10, "fetch_k": 30, "lambda_mult": 0.7},
+            search_kwargs={"k": 8, "fetch_k": 25, "lambda_mult": 0.7},
         )
-        compression_retriever = ContextualCompressionRetriever(
-            base_compressor=self._compressor,
-            base_retriever=retriever,
-        )
-        docs = compression_retriever.invoke(query)
+        docs = await retriever.ainvoke(query)
 
-        # 토큰 예산 내로 조합
-        result_parts = []
+        result_parts: list[str] = []
         token_count = 0
+        seen_sources: set[str] = set()
+
         for doc in docs:
+            source = doc.metadata.get("source", "unknown")
             chunk_tokens = len(doc.page_content.split())
+
+            # 중복 소스 스킵 (같은 파일의 연속 청크 과다 방지)
+            if source in seen_sources and chunk_tokens < 50:
+                continue
+
             if token_count + chunk_tokens > max_tokens:
                 break
-            result_parts.append(f"# {doc.metadata.get('source', 'unknown')}\n{doc.page_content}")
+
+            result_parts.append(f"# {source}\n{doc.page_content}")
             token_count += chunk_tokens
+            seen_sources.add(source)
 
         return "\n\n---\n\n".join(result_parts)
 ```
 
-### 6.5 MemoryManager — 대화 히스토리 압축
+### 6.5 MemoryManager — 슬라이딩 윈도우 (수정: LangChain 의존성 제거)
 
 ```python
 # src/memory/manager.py
-import sqlite3
+"""
+v2.1 변경사항:
+  ConversationSummaryBufferMemory(deprecated LangChain) 제거.
+  대안: 순수 Python 슬라이딩 윈도우 + SQLite 영속.
+  요약 압축은 Phase 2에서 필요 시 OllamaAdapter.chat()으로 구현.
+"""
 import json
+import time
+import sqlite3
+import asyncio
 from pathlib import Path
-from langchain.memory import ConversationSummaryBufferMemory
-from src.models.adapter import ModelAdapterBase
+from src.models.adapter import Message
 
 
 class MemoryManager:
     """
-    슬라이딩 윈도우 + LLM 요약으로 무한 대화 지원.
-    SQLite로 영속 저장 (재시작 후 복원 가능).
+    슬라이딩 윈도우로 최근 N 턴 유지.
+    SQLite로 전체 대화 영속 저장.
+    LangChain 의존성 없음.
     """
 
-    def __init__(self, llm, max_token_limit: int = 1500):
-        self._llm = llm
-        self._max_tokens = max_token_limit
+    def __init__(self, max_tokens: int = 1500, window_turns: int = 10):
+        self._max_tokens = max_tokens
+        self._window_turns = window_turns
+        self._buffer: list[Message] = []    # 메모리 내 슬라이딩 윈도우
         self._db_path = Path("data/memory.db")
-        self._init_db()
-        self._summary_memory = ConversationSummaryBufferMemory(
-            llm=llm,
-            max_token_limit=max_token_limit,
-            return_messages=True,
-        )
-
-    def _init_db(self):
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _init_db(self) -> None:
         with sqlite3.connect(self._db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY,
-                    role TEXT,
-                    content TEXT,
-                    timestamp REAL,
-                    session_id TEXT
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role      TEXT NOT NULL,
+                    content   TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    session   TEXT NOT NULL DEFAULT 'default'
                 )
             """)
 
-    async def get_compressed(self, max_tokens: int) -> list[dict]:
-        """압축된 히스토리 반환 (토큰 예산 내)"""
-        msgs = self._summary_memory.chat_memory.messages
-        result = []
+    async def get_compressed(self, max_tokens: int) -> list[Message]:
+        """토큰 예산 내 최신 메시지 우선으로 반환"""
+        result: list[Message] = []
         token_count = 0
-        for msg in reversed(msgs):  # 최신 메시지 우선
+        # 최신 메시지부터 역순으로 추가
+        for msg in reversed(self._buffer):
             tokens = len(msg.content.split())
             if token_count + tokens > max_tokens:
                 break
-            result.insert(0, {"role": msg.type, "content": msg.content})
+            result.insert(0, msg)
             token_count += tokens
         return result
 
-    async def update(self, user_input: str, assistant_response: str):
-        self._summary_memory.save_context(
-            {"input": user_input},
-            {"output": assistant_response},
-        )
-        # SQLite 영속 저장
+    async def update(self, user_input: str, assistant_response: str) -> None:
+        """대화 추가 + 슬라이딩 윈도우 유지"""
+        new_msgs = [
+            Message(role="user", content=user_input),
+            Message(role="assistant", content=assistant_response),
+        ]
+        self._buffer.extend(new_msgs)
+
+        # 윈도우 크기 초과 시 오래된 턴 제거
+        max_messages = self._window_turns * 2
+        if len(self._buffer) > max_messages:
+            self._buffer = self._buffer[-max_messages:]
+
+        # SQLite 비동기 저장
+        await asyncio.to_thread(self._save_to_db, new_msgs)
+
+    def _save_to_db(self, messages: list[Message]) -> None:
         with sqlite3.connect(self._db_path) as conn:
-            import time
+            now = time.time()
             conn.executemany(
                 "INSERT INTO messages (role, content, timestamp) VALUES (?, ?, ?)",
-                [
-                    ("user", user_input, time.time()),
-                    ("assistant", assistant_response, time.time()),
-                ],
+                [(m.role, m.content, now) for m in messages],
             )
+
+    def clear(self) -> None:
+        self._buffer.clear()
+
+    def load_session(self, session: str = "default", last_n: int = 20) -> None:
+        """재시작 후 DB에서 최근 세션 복원"""
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT role, content FROM messages WHERE session=? ORDER BY id DESC LIMIT ?",
+                (session, last_n),
+            ).fetchall()
+        self._buffer = [Message(role=r, content=c) for r, c in reversed(rows)]
+```
+
+### 6.6 CLI 진입점 (신규)
+
+```python
+# src/cli/main.py
+"""
+CLI-First 진입점. FastAPI 서버 불필요.
+사용:
+  local-ai chat "질문"
+  local-ai code "코드 작성 요청"
+  local-ai index /path/to/project
+  local-ai models list
+  local-ai models switch qwen2.5-coder:7b
+"""
+import asyncio
+import typer
+from pathlib import Path
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+
+from src.models.registry import ModelRegistry
+from src.models.pool import ModelPool
+from src.agent.dispatcher import TaskDispatcher
+from src.agent.runner import AgentRunner
+from src.context.builder import ContextBuilder
+from src.memory.manager import MemoryManager
+from src.rag.pipeline import RAGPipeline
+from src.tools.registry import ToolRegistry
+from src.tools import file_tools, shell_tools, git_tools, rag_tools
+from src.observe.bus import ObservabilityBus
+from src.config import settings
+
+app = typer.Typer(name="local-ai", help="Local LLM Agent (Offline, White-Box)")
+console = Console()
+
+
+def _build_runner() -> AgentRunner:
+    """공통 AgentRunner 초기화"""
+    obs = ObservabilityBus.get_default()
+    registry = ModelRegistry()
+    pool = ModelPool(registry, obs)
+    asyncio.get_event_loop().run_until_complete(pool.initialize())
+
+    memory = MemoryManager()
+    rag = RAGPipeline()
+    ctx = ContextBuilder(memory=memory, rag=rag, system_prompt=settings.SYSTEM_PROMPT)
+    tools = ToolRegistry(obs)
+    file_tools.register(tools)
+    shell_tools.register(tools)
+    git_tools.register(tools)
+    rag_tools.register(tools, rag)
+
+    dispatcher = TaskDispatcher(pool, obs)
+    return AgentRunner(pool, dispatcher, tools, ctx, memory, obs)
+
+
+@app.command()
+def chat(
+    message: str = typer.Argument(..., help="사용자 메시지"),
+    model: str | None = typer.Option(None, "--model", "-m", help="모델 오버라이드"),
+    stream: bool = typer.Option(True, help="스트리밍 출력"),
+) -> None:
+    """일반 대화 모드"""
+    runner = _build_runner()
+    tokens: list[str] = []
+
+    def on_token(t: str) -> None:
+        tokens.append(t)
+        console.print(t, end="", highlight=False)
+
+    asyncio.run(runner.run(message, on_token=on_token if stream else None))
+    if not stream:
+        # 비스트리밍: 완료 후 한 번에 출력
+        pass
+
+
+@app.command()
+def code(
+    request: str = typer.Argument(..., help="코드 생성/수정 요청"),
+    file: Path | None = typer.Option(None, "--file", "-f", help="대상 파일"),
+) -> None:
+    """코드 에이전트 모드"""
+    prompt = request
+    if file and file.exists():
+        content = file.read_text()
+        prompt = f"File: {file}\n\n```\n{content}\n```\n\nRequest: {request}"
+    runner = _build_runner()
+    asyncio.run(runner.run(prompt, on_token=lambda t: console.print(t, end="", highlight=False)))
+
+
+@app.command()
+def index(
+    path: Path = typer.Argument(..., help="인덱싱할 경로"),
+) -> None:
+    """코드베이스 RAG 인덱싱"""
+    rag = RAGPipeline()
+    with console.status(f"[bold green]인덱싱 중: {path}"):
+        count = rag.index_codebase(str(path))
+    console.print(f"[green]완료: {count}개 청크 인덱싱됨[/green]")
+
+
+models_app = typer.Typer(help="모델 관리")
+app.add_typer(models_app, name="models")
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """설치된 모델 목록"""
+    import httpx, asyncio
+    async def _list():
+        from src.models.ollama_adapter import OllamaAdapter
+        adapter = OllamaAdapter()
+        return await adapter.list_models()
+    models = asyncio.run(_list())
+    for m in models:
+        console.print(f"  {m.name:<40} {m.size_gb:.1f}GB  ctx:{m.context_length}")
+
+
+@models_app.command("switch")
+def models_switch(name: str = typer.Argument(..., help="전환할 모델명")) -> None:
+    """활성 모델 전환"""
+    console.print(f"모델 전환: [bold]{name}[/bold]")
+    # 다음 실행부터 적용 — .env.local의 DEFAULT_MODEL 업데이트
+    env_path = Path(".env.local")
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    updated = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
+    updated.append(f"DEFAULT_MODEL={name}")
+    env_path.write_text("\n".join(updated) + "\n")
+    console.print(f"[green].env.local 업데이트 완료[/green]")
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+`pyproject.toml` 진입점 등록:
+
+```toml
+[project.scripts]
+local-ai = "src.cli.main:main"
 ```
 
 ---
 
 ## 7. 관측성(Observability) 설계
 
-### 7.1 ObservabilityBus — 이벤트 허브
+### 7.1 ObservabilityBus (수정: async I/O)
 
 ```python
 # src/observe/bus.py
@@ -920,8 +1411,8 @@ from typing import Callable
 class ObservabilityBus:
     """
     White-Box 핵심 컴포넌트.
-    파이프라인의 모든 단계 이벤트를 수집·배포.
-    SSE를 통해 실시간 관측 가능.
+    v2.1 수정: emit()은 동기 유지 (어디서든 호출 가능),
+              파일 쓰기는 asyncio.to_thread()로 이벤트 루프 블로킹 방지.
     """
 
     _default: "ObservabilityBus | None" = None
@@ -930,6 +1421,7 @@ class ObservabilityBus:
         self._subscribers: list[Callable] = []
         self._log_path = Path("data/logs/events.jsonl")
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @classmethod
     def get_default(cls) -> "ObservabilityBus":
@@ -942,15 +1434,25 @@ class ObservabilityBus:
 
     def emit(self, event_type: str, data: dict) -> None:
         event = {"type": event_type, "data": data, "timestamp": time.time()}
-        # 파일 기록
-        with open(self._log_path, "a") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
-        # 구독자에게 배포
+        line = json.dumps(event, ensure_ascii=False) + "\n"
+
+        # 파일 쓰기: 이벤트 루프가 실행 중이면 비동기, 아니면 동기
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self._write_log, line)
+        except RuntimeError:
+            # 이벤트 루프 없음 (초기화 단계) → 동기 쓰기
+            self._write_log(line)
+
         for sub in self._subscribers:
             try:
                 sub(event)
             except Exception:
                 pass
+
+    def _write_log(self, line: str) -> None:
+        with open(self._log_path, "a") as f:
+            f.write(line)
 ```
 
 ### 7.2 FastAPI 관측 엔드포인트
@@ -1002,11 +1504,11 @@ export DEBUG_DUMP_CONTEXT=true
 │              토큰 예산 (8192 총합)                     │
 ├────────────────────┬─────────────────────────────────┤
 │ 시스템 프롬프트     │  ~300 tok  (3.7%)               │
-│ 대화 히스토리       │  ~1500 tok (18.3%)  → 요약 압축 │
-│ RAG 컨텍스트        │  ~2000 tok (24.4%)  → LLM 압축  │
+│ 대화 히스토리       │  ~1500 tok (18.3%)  → 슬라이딩   │
+│ RAG 컨텍스트        │  ~2000 tok (24.4%)  → MMR+트런케 │
 │ 현재 입력           │  ~500 tok  (6.1%)               │
-│ 출력 예약           │  ~2048 tok (25.0%)               │
-│ 여유분             │  ~1844 tok (22.5%)               │
+│ 출력 예약           │  ~2048 tok (25.0%)              │
+│ 여유분             │  ~1844 tok (22.5%)              │
 └────────────────────┴─────────────────────────────────┘
 ```
 
@@ -1021,17 +1523,14 @@ export DEBUG_DUMP_CONTEXT=true
 [RULES] See Rules.md for constraints.
 ```
 
-### 8.3 대화 히스토리 압축 전략
+### 8.3 대화 히스토리 슬라이딩 윈도우
 
 ```
-최근 N 턴은 원본 유지 → 이전은 LLM 요약으로 압축
+최근 10 턴 원본 유지 (~1500 tok)
+초과 시 오래된 턴부터 제거 (요약 없음 — 추가 LLM 호출 없음)
 
-┌─────────────────────────────────────────────────┐
-│ 요약된 이전 대화 (LLM이 요약, ~300 tok)          │
-├─────────────────────────────────────────────────┤
-│ 최근 5턴 원본 유지 (~1200 tok)                   │
-└─────────────────────────────────────────────────┘
-전체 히스토리 예산: 1500 tok 이내 유지
+Phase 3에서 LLM 요약 압축 추가 예정:
+  오래된 턴 → OllamaAdapter.chat()으로 요약 → 1줄로 압축
 ```
 
 ### 8.4 RAG 중복 제거
@@ -1052,9 +1551,9 @@ def deduplicate_chunks(chunks: list, threshold: float = 0.95) -> list:
 class EarlyStopHandler:
     """반복 패턴 감지 시 LLM 출력 조기 종료"""
     STOP_PATTERNS = [
-        "```\n\n```",      # 빈 코드 블록 반복
-        "...\n\n...",      # 말줄임표 반복
-        "\n\n\n\n",        # 과도한 빈 줄
+        "```\n\n```",   # 빈 코드 블록 반복
+        "...\n\n...",   # 말줄임표 반복
+        "\n\n\n\n",     # 과도한 빈 줄
     ]
 
     def check(self, buffer: str) -> bool:
@@ -1149,29 +1648,35 @@ locals-only/
 ├── Rules.md                 ← 운영 규칙 (코드보다 우선)
 ├── CLAUDE.md                ← Claude Code 전용 지시 (이 프로젝트 작업 시)
 ├── README.md                ← 빠른 시작 가이드
+├── pyproject.toml           ← 패키지 메타데이터 + CLI 진입점
 ├── .env.local               ← 환경변수 (gitignore)
 │
 ├── src/                     ← 핵심 소스코드
+│   ├── cli/
+│   │   └── main.py          ← CLI 진입점 (Typer) ★ 메인 인터페이스
+│   │
 │   ├── models/
-│   │   ├── adapter.py       ← ModelAdapterBase (인터페이스)
-│   │   ├── ollama_adapter.py← OllamaAdapter (구현 + white-box 로깅)
-│   │   └── registry.py      ← ModelRegistry (RAM 기반 자동 선택)
+│   │   ├── adapter.py       ← ModelAdapterBase + Message + ChatResult
+│   │   ├── ollama_adapter.py← OllamaAdapter (white-box 로깅, async I/O)
+│   │   ├── registry.py      ← ModelRegistry (RAM 기반 자동 선택)
+│   │   └── pool.py          ← ModelPool (다중 LLM 슬롯 관리)
 │   │
 │   ├── agent/
 │   │   ├── runner.py        ← AgentRunner (도구 호출 루프)
-│   │   └── intent.py        ← IntentClassifier
+│   │   ├── dispatcher.py    ← TaskDispatcher (의도→모델 라우팅)
+│   │   └── intent.py        ← IntentClassifier (경량 모델 사용)
 │   │
 │   ├── rag/
-│   │   ├── pipeline.py      ← RAGPipeline (임베딩+검색+압축)
+│   │   ├── pipeline.py      ← RAGPipeline (임베딩+MMR검색+트런케이션)
 │   │   ├── indexer.py       ← 코드베이스 인덱싱
 │   │   └── dedup.py         ← 중복 청크 제거
 │   │
 │   ├── memory/
-│   │   ├── manager.py       ← MemoryManager (슬라이딩윈도우+요약)
+│   │   ├── manager.py       ← MemoryManager (슬라이딩윈도우+SQLite)
 │   │   └── sqlite_store.py  ← SQLite 영속 저장
 │   │
 │   ├── context/
-│   │   ├── builder.py       ← ContextBuilder (토큰 예산 조립)
+│   │   ├── builder.py       ← ContextBuilder (list[Message] 반환)
 │   │   └── budget.py        ← TokenBudget 계산
 │   │
 │   ├── tools/
@@ -1181,15 +1686,17 @@ locals-only/
 │   │   ├── git_tools.py     ← status, diff, log, commit
 │   │   └── rag_tools.py     ← search_codebase, index_path
 │   │
-│   ├── api/
-│   │   ├── main.py          ← FastAPI 앱
+│   ├── api/                 ← FastAPI (선택적 — CLI 없이도 동작)
+│   │   ├── main.py
 │   │   └── routes/
 │   │       ├── chat.py      ← OpenAI 호환 /v1/chat/completions
 │   │       ├── models.py    ← 모델 전환 /api/switch-model
 │   │       └── observe.py   ← SSE 관측 /api/observe
 │   │
-│   └── observe/
-│       └── bus.py           ← ObservabilityBus (이벤트 허브)
+│   ├── observe/
+│   │   └── bus.py           ← ObservabilityBus (async-safe 이벤트 허브)
+│   │
+│   └── config.py            ← Settings (환경변수 + models.yaml 로드)
 │
 ├── config/
 │   ├── models.yaml          ← 모델 프리셋 (단일 진실 소스)
@@ -1219,10 +1726,12 @@ locals-only/
     ├── unit/
     │   ├── test_adapter.py  ← MockAdapter 사용
     │   ├── test_context.py
+    │   ├── test_pool.py     ← ModelPool 슬롯 관리
     │   └── test_tools.py
     └── integration/         ← 실제 Ollama 필요
         ├── test_rag.py
-        └── test_agent.py
+        ├── test_agent.py
+        └── test_dispatcher.py
 ```
 
 ---
@@ -1248,10 +1757,14 @@ source .venv/bin/activate
 pip install \
   langchain langchain-ollama langchain-chroma \
   chromadb fastapi uvicorn httpx \
+  typer rich \
   open-webui \
-  rich typer pydantic pyyaml psutil \
+  pydantic pyyaml psutil \
   aider-chat shell-gpt \
   ruff pytest pytest-asyncio
+
+# CLI 로컬 설치 (local-ai 명령 활성화)
+pip install -e .
 
 # 3. Ollama 서비스 시작
 brew services start ollama
@@ -1260,7 +1773,8 @@ sleep 3
 # 4. 모델 다운로드 (인터넷 환경에서 실행)
 echo "모델 다운로드 중..."
 ollama pull qwen2.5-coder:7b
-ollama pull qwen2.5-coder:3b   # 8GB 환경 대비
+ollama pull qwen2.5-coder:3b
+ollama pull qwen2.5-coder:1.5b   # 의도 분류용
 ollama pull qwen2.5:7b
 ollama pull gemma3:4b
 ollama pull nomic-embed-text
@@ -1273,9 +1787,14 @@ ollama create agent-tools -f modelfiles/agent-tools.Modelfile
 mkdir -p data/{chroma,logs,logs/context_dumps}
 
 echo "=== 설치 완료 ==="
-echo "Ollama API  : http://localhost:11434"
-echo "Agent API   : http://localhost:8080"
-echo "Observability: http://localhost:8090/api/observe"
+echo "CLI 사용:"
+echo "  local-ai chat '질문'"
+echo "  local-ai code '코드 작성'"
+echo "  local-ai index /path/to/project"
+echo "  local-ai models list"
+echo ""
+echo "API 서버 (선택적):"
+echo "  uvicorn src.api.main:app --port 8080"
 ```
 
 ### 11.2 환경변수 `.env.local`
@@ -1283,10 +1802,10 @@ echo "Observability: http://localhost:8090/api/observe"
 ```bash
 # Ollama 서버
 OLLAMA_HOST=0.0.0.0:11434
-OLLAMA_MAX_LOADED_MODELS=1        # RAM 8GB: 1, RAM 16GB: 2
+OLLAMA_MAX_LOADED_MODELS=2        # 항상 2 — main(1) + embed(1) 동시 유지
 OLLAMA_FLASH_ATTENTION=1
 OLLAMA_KV_CACHE_TYPE=q8_0
-OLLAMA_NUM_PARALLEL=2
+OLLAMA_NUM_PARALLEL=1             # 직렬 처리 (RAM 절약)
 
 # 모델 설정 (models.yaml의 기본값을 오버라이드)
 DEFAULT_MODEL=qwen2.5-coder:7b
@@ -1300,14 +1819,18 @@ MEMORY_DB_PATH=./data/memory.db
 MAX_CONTEXT_TOKENS=8192
 MAX_OUTPUT_TOKENS=2048
 MAX_AGENT_ITERATIONS=10
+MEMORY_WINDOW_TURNS=10
 
 # OpenAI 호환 (에디터 연동용)
 OPENAI_API_BASE=http://localhost:11434/v1
 OPENAI_API_KEY=ollama
 
 # White-Box 디버그
-DEBUG_DUMP_CONTEXT=false          # true: 프롬프트 덤프 활성화
+DEBUG_DUMP_CONTEXT=false
 LOG_LEVEL=INFO
+
+# 시스템 프롬프트
+SYSTEM_PROMPT="[ROLE] Local coding agent. Offline. M1 Mac.\n[FORMAT] Concise. Code blocks only. No preamble."
 ```
 
 ### 11.3 GGUF 모델 직접 등록 스크립트
@@ -1315,8 +1838,6 @@ LOG_LEVEL=INFO
 ```bash
 #!/bin/bash
 # scripts/import-gguf.sh
-# 사용: ./scripts/import-gguf.sh /path/to/model.gguf [model-name]
-
 GGUF_PATH="$1"
 MODEL_NAME="${2:-$(basename "$GGUF_PATH" .gguf)}"
 
@@ -1325,7 +1846,6 @@ if [ ! -f "$GGUF_PATH" ]; then
   exit 1
 fi
 
-# 임시 Modelfile 생성
 MODELFILE=$(mktemp)
 cat > "$MODELFILE" << EOF
 FROM $GGUF_PATH
@@ -1339,10 +1859,10 @@ ollama create "$MODEL_NAME" -f "$MODELFILE"
 rm "$MODELFILE"
 
 echo "Done. Test with: ollama run $MODEL_NAME"
-echo "Switch in agent: POST /api/switch-model {\"model\": \"$MODEL_NAME\"}"
+echo "Use in CLI: local-ai models switch $MODEL_NAME"
 ```
 
-### 11.4 launchd 자동 시작
+### 11.4 launchd 자동 시작 (API 서버, 선택적)
 
 ```xml
 <!-- ~/Library/LaunchAgents/com.local.ai-agent.plist -->
@@ -1357,14 +1877,16 @@ echo "Switch in agent: POST /api/switch-model {\"model\": \"$MODEL_NAME\"}"
   <array>
     <string>/bin/zsh</string>
     <string>-c</string>
-    <string>source /Users/USERNAME/ai-local/.venv/bin/activate && uvicorn src.api.main:app --host 0.0.0.0 --port 8080</string>
+    <string>source /Users/USERNAME/locals-only/.venv/bin/activate && uvicorn src.api.main:app --host 0.0.0.0 --port 8080</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/USERNAME/ai-local</string>
+  <string>/Users/USERNAME/locals-only</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>OLLAMA_HOST</key>
     <string>0.0.0.0:11434</string>
+    <key>OLLAMA_MAX_LOADED_MODELS</key>
+    <string>2</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -1385,68 +1907,77 @@ echo "Switch in agent: POST /api/switch-model {\"model\": \"$MODEL_NAME\"}"
 ### 12.1 요청 처리 흐름
 
 ```
-사용자 요청
+사용자 요청 (CLI or API)
      │
      ▼
-[IntentClassifier]
-  code_gen  → code-assist 모델 선택
-  file_edit → agent-tools 모델 선택
-  qa/chat   → chat 모델 선택
-  rag_query → 검색 모드
+[TaskDispatcher.dispatch()]
+  ├─ classify()  →  경량 1.5b 모델로 의도 분류 (빠름, ~0.3초)
+  │               intent: code_gen / code_review / chat / rag_query / ...
+  └─ acquire()   →  ModelPool에서 해당 목적 슬롯 획득
+                     main 슬롯: 필요 시 모델 전환
+                     embed 슬롯: 항상 nomic-embed-text 고정
      │
      ▼
-[ContextBuilder] ← TokenBudget 계산
-  ├─ system_prompt    (< 300 tok)
-  ├─ compressed_hist  (< 1500 tok)
-  ├─ rag_context      (< 2000 tok, 압축됨)
-  └─ user_input       (< 500 tok)
+[ContextBuilder.build()] → list[Message]
+  ├─ system_prompt    (< 300 tok, Message)
+  ├─ history          (< 1500 tok, 슬라이딩 윈도우, list[Message])
+  ├─ rag_context      (< 2000 tok, MMR+트런케이션, Message)
+  └─ user_input       (< 500 tok, Message)
      │
      ▼
 [ObservabilityBus] ← context_built 이벤트 발행
      │
      ▼
-[ModelAdapter.chat()] ← 자동 로깅
-  스트리밍 출력 시작 →
+[OllamaAdapter.chat()] ← 자동 로깅 (async I/O)
+  스트리밍: on_token 콜백으로 터미널 출력
+  완료: ChatResult 반환 (content + tool_calls)
      │
-     ├── tool_call 감지?
+     ├── result.tool_calls 있음?
      │       │
      │       ▼
      │   [ToolRegistry.execute()]
      │   ├─ 허용 목록 확인
-     │   ├─ 파괴적 작업? → 사용자 확인
+     │   ├─ asyncio.to_thread()로 동기 도구 실행
      │   ├─ 실행 + 감사 로그
-     │   └─ 결과 반환 → 재순환 (max 10회)
+     │   └─ tool 메시지 추가 → 재순환 (max 10회)
      │
-     └── 최종 응답
+     └── 최종 응답 (tool_calls 없음)
            │
            ▼
-     [ResponseStreamer] → 사용자 출력
+     [MemoryManager.update()] → 슬라이딩 윈도우 + SQLite 비동기 저장
            │
            ▼
-     [MemoryManager.update()] → SQLite 저장
+     [ModelPool.release()] → 슬롯 반환
            │
            ▼
-     [ObservabilityBus] ← request_done 이벤트 발행
+     [ObservabilityBus] ← request_done 이벤트
 ```
 
-### 12.2 모델 전환 플로우
+### 12.2 다중 LLM 오케스트레이션 흐름
 
 ```
-POST /api/switch-model {"model": "deepseek-coder:6.7b"}
+요청 A (code_gen) ─→ [TaskDispatcher] ─→ main 슬롯(qwen2.5-coder:7b) ─→ 처리 중
+                                       │
+요청 B (embed)    ─→ [TaskDispatcher] ─→ embed 슬롯(nomic-embed-text) ─→ 병렬 처리 가능
+                                       │
+요청 C (code_gen) ─→ [TaskDispatcher] ─→ main 슬롯 locked → 대기 → 완료 후 처리
+
+※ main 슬롯과 embed 슬롯은 병렬 실행 가능
+※ main 슬롯 내 요청은 직렬 (Ollama 단일 모델 제약)
+```
+
+### 12.3 모델 전환 플로우
+
+```
+ModelPool.acquire("code") 호출
      │
      ▼
-[ModelRegistry.get_params("deepseek-coder:6.7b")]
-  → config/models.yaml에서 파라미터 로드
-  → 없으면 기본값 사용
+현재 main 슬롯 모델이 qwen2.5:7b (agent용)?
      │
-     ▼
-[OllamaAdapter.switch_model()]
-  → self._model = "deepseek-coder:6.7b"
-  → self._params = 로드된 파라미터
+     ├─ YES → OllamaAdapter.switch_model("qwen2.5-coder:7b")
+     │         Ollama가 자동으로 이전 모델 언로드 + 신규 로드
      │
-     ▼
-[ObservabilityBus] ← model_switched 이벤트
-  → 이후 모든 요청은 새 모델 사용
+     └─ NO (이미 qwen2.5-coder:7b) → 즉시 반환
 ```
 
 ---
@@ -1456,13 +1987,9 @@ POST /api/switch-model {"model": "deepseek-coder:6.7b"}
 ### 13.1 Ollama 서버 튜닝
 
 ```bash
-# RAM 8GB 환경
-export OLLAMA_MAX_LOADED_MODELS=1
-export OLLAMA_NUM_PARALLEL=1
-
-# RAM 16GB 환경
-export OLLAMA_MAX_LOADED_MODELS=2
-export OLLAMA_NUM_PARALLEL=2
+# 다중 LLM 오케스트레이션 (main + embed 동시)
+export OLLAMA_MAX_LOADED_MODELS=2   # 항상 2 권장
+export OLLAMA_NUM_PARALLEL=1        # 모델당 직렬 (RAM 절약)
 
 # 공통
 export OLLAMA_FLASH_ATTENTION=1
@@ -1471,51 +1998,54 @@ export OLLAMA_KV_CACHE_TYPE=q8_0
 
 ### 13.2 모델별 파라미터 (config/models.yaml 기준)
 
-| 파라미터 | 코드 생성 | 채팅 | 에이전트 | 빠른 완성 |
+| 파라미터 | 코드 생성 | 채팅 | 에이전트 | 의도 분류 |
 |---------|---------|------|---------|---------|
-| temperature | 0.1 | 0.7 | 0.2 | 0.1 |
+| temperature | 0.1 | 0.7 | 0.2 | 0.0 |
 | top_p | 0.9 | 0.95 | 0.9 | 0.9 |
 | top_k | 20 | 40 | 30 | 10 |
-| repeat_penalty | 1.1 | 1.05 | 1.1 | 1.05 |
-| num_ctx | 8192 | 32768 | 8192 | 4096 |
-| num_predict | 2048 | 1024 | 1024 | 256 |
+| repeat_penalty | 1.1 | 1.05 | 1.1 | 1.0 |
+| num_ctx | 8192 | 32768 | 8192 | 2048 |
+| num_predict | 2048 | 1024 | 1024 | 64 |
 
 ### 13.3 벤치마크 기준 (M1 16GB, Q4_K_M)
 
 | 모델 | 토큰/초 | 첫 토큰 지연 | 메모리 | 권장 용도 |
 |------|--------|------------|--------|---------|
-| qwen2.5-coder:1.5b | ~85 t/s | ~0.4s | ~1.0GB | 탭 완성 |
+| qwen2.5-coder:1.5b | ~85 t/s | ~0.3s | ~1.0GB | 의도 분류, 탭 완성 |
 | qwen2.5-coder:3b | ~45 t/s | ~0.8s | ~2.5GB | 코드 (8GB 환경) |
 | gemma3:4b | ~38 t/s | ~1.0s | ~3.1GB | 채팅 |
 | qwen2.5-coder:7b | ~22 t/s | ~1.5s | ~5.2GB | 코드 (16GB 환경) |
 | qwen2.5:7b | ~22 t/s | ~1.5s | ~5.2GB | 에이전트 |
 | mistral:7b | ~20 t/s | ~1.6s | ~4.5GB | 폴백 |
+| nomic-embed-text | N/A | ~0.05s | ~270MB | 임베딩 전용 |
 
 ---
 
 ## 14. 확장 로드맵
 
-### Phase 1 — 기반 구축
-- [x] 기존 설계서 작성
-- [ ] `ModelAdapter` + `OllamaAdapter` 구현
+### Phase 1 — 기반 구축 (CLI 우선)
+- [ ] `ModelAdapter` + `OllamaAdapter` 구현 (ChatResult, async I/O)
 - [ ] `ModelRegistry` (config/models.yaml 연동)
-- [ ] `ObservabilityBus` 구현
+- [ ] `ModelPool` (embed 고정 슬롯 + main 슬롯)
+- [ ] `ObservabilityBus` (async-safe)
 - [ ] `ToolRegistry` + 기본 도구 (file, shell, git)
-- [ ] FastAPI 서버 (OpenAI 호환 + switch-model + observe)
+- [ ] `ContextBuilder` (list[Message] 반환, 타입 일관성)
+- [ ] `MemoryManager` (슬라이딩 윈도우 + SQLite)
+- [ ] **CLI 진입점** (`local-ai chat`, `local-ai code`, `local-ai models`)
 
 ### Phase 2 — RAG + 에이전트
-- [ ] `RAGPipeline` (임베딩 + 검색 + 압축)
-- [ ] `ContextBuilder` (토큰 예산 관리)
-- [ ] `MemoryManager` (슬라이딩 윈도우 + SQLite)
-- [ ] `AgentRunner` (도구 호출 루프, white-box)
+- [ ] `RAGPipeline` (임베딩 + MMR 검색 + 토큰 트런케이션)
+- [ ] `TaskDispatcher` (의도 분류 + 슬롯 라우팅)
+- [ ] `AgentRunner` (도구 호출 루프, ChatResult 기반)
 - [ ] 코드베이스 인덱싱 스크립트
+- [ ] FastAPI 서버 (OpenAI 호환, 에디터 연동용)
 
 ### Phase 3 — 고도화
+- [ ] LLM 요약 압축 (MemoryManager — 오래된 턴 요약)
 - [ ] 실시간 관측 대시보드 (SSE + 브라우저 UI)
 - [ ] 컨텍스트 덤프 + 분석 도구
 - [ ] 프로젝트별 컨텍스트 격리 (멀티 ChromaDB 컬렉션)
 - [ ] 자동 모델 선택 (쿼리 복잡도 기반)
-- [ ] 평가 파이프라인 (코드 테스트 자동 실행)
 
 ### Phase 4 — 멀티 에이전트 (선택)
 - [ ] Planner + Executor 분리
@@ -1524,40 +2054,89 @@ export OLLAMA_KV_CACHE_TYPE=q8_0
 
 ---
 
+## 15. 효율성 검증 결과 (v2.1 개정 이유)
+
+v2.0 설계서의 7가지 효율성 문제를 검증하고 수정했습니다.
+
+### 검증된 문제점 및 수정사항
+
+| # | 문제 | 위치 (v2.0) | 영향 | 수정 |
+|---|------|-----------|------|------|
+| 1 | **tool_call 감지 로직 오류** | `AgentRunner.run()` | 도구 호출 불가 (버그) | ChatResult.tool_calls (done 청크) 사용 |
+| 2 | **동기 파일 I/O 이벤트 루프 블로킹** | `ObservabilityBus.emit()` | async 성능 저하 | `loop.run_in_executor()` / `asyncio.to_thread()` |
+| 3 | **ContextBuilder 타입 불일치** | `ContextBuilder.build()` | 런타임 타입 오류 | 항상 `list[Message]` 반환 |
+| 4 | **RAGPipeline LLMChainExtractor** | `RAGPipeline.search_and_compress()` | 청크당 추가 LLM 호출, 8GB에서 과부하 | 제거 → MMR + 토큰 트런케이션 |
+| 5 | **MemoryManager 구 LangChain API** | `MemoryManager.__init__()` | deprecated, LangChain 버전 충돌 | 순수 Python 슬라이딩 윈도우로 교체 |
+| 6 | **다중 LLM 오케스트레이션 부재** | 전체 설계 | 의도별 모델 라우팅 불가 | ModelPool + TaskDispatcher 신규 추가 |
+| 7 | **CLI 진입점 없음** | 전체 설계 | 서버 없이 사용 불가 | Typer 기반 `local-ai` CLI 추가 |
+
+### 아키텍처 변경 요약
+
+```
+v2.0: API-First → FastAPI → AgentRunner → ModelAdapter (단일)
+v2.1: CLI-First → AgentRunner → TaskDispatcher → ModelPool → OllamaAdapter (다중)
+
+핵심 개선:
+  - CLI 한 줄로 즉시 실행 (서버 불필요)
+  - embed 슬롯 상시 고정으로 RAG 오버헤드 제거
+  - 의도 분류를 1.5b 경량 모델로 처리 (~0.3초)
+  - tool_calls Ollama 실제 API 형식 준수
+  - 모든 async 컨텍스트에서 non-blocking I/O
+```
+
+---
+
 ## 부록: 빠른 참조
 
-### 자주 쓰는 명령어
+### CLI 명령어
 
 ```bash
-# 모델 전환 (CLI)
-./scripts/switch-model.sh deepseek-coder:6.7b
+# 설치
+pip install -e .
 
-# 모델 전환 (API)
+# 대화
+local-ai chat "파이썬으로 퀵소트 구현해줘"
+
+# 코드 에이전트 (파일 컨텍스트 포함)
+local-ai code "버그 수정해줘" --file src/models/adapter.py
+
+# RAG 인덱싱
+local-ai index /path/to/project
+
+# 모델 관리
+local-ai models list
+local-ai models switch deepseek-coder:6.7b
+
+# 스트리밍 비활성화
+local-ai chat "질문" --no-stream
+```
+
+### API 명령어 (서버 실행 시)
+
+```bash
+# API 서버 시작
+uvicorn src.api.main:app --reload --port 8080
+
+# 모델 전환
 curl -X POST http://localhost:8080/api/switch-model \
   -H "Content-Type: application/json" \
   -d '{"model": "deepseek-coder:6.7b"}'
 
-# 새 GGUF 모델 등록
-./scripts/import-gguf.sh /path/to/model.gguf my-model-name
-
-# RAG 인덱싱
-./scripts/index-codebase.sh /path/to/project
-
 # 관측 스트림 구독
-curl -N http://localhost:8090/api/observe
+curl -N http://localhost:8080/api/observe
 
 # 토큰 사용량 확인
 curl http://localhost:8080/api/token-usage
 
 # 서비스 상태 확인
 curl http://localhost:8080/api/health
+```
 
-# 컨텍스트 덤프 활성화
-DEBUG_DUMP_CONTEXT=true uvicorn src.api.main:app --port 8080
+### 새 GGUF 모델 등록
 
-# 설치된 모델 목록
-ollama list
-curl http://localhost:11434/api/tags | jq '.models[].name'
+```bash
+./scripts/import-gguf.sh /path/to/model.gguf my-model-name
+local-ai models switch my-model-name
 ```
 
 ### 연관 문서
