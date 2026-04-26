@@ -14,14 +14,11 @@ FastAPI 서버 없이 터미널에서 즉시 사용 가능 (CLI-First).
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 
 app = typer.Typer(
     name="local-ai",
@@ -36,8 +33,8 @@ err_console = Console(stderr=True, style="bold red")
 # 공통 초기화
 # ------------------------------------------------------------------
 
-def _build_runner(with_rag: bool = False) -> "AgentRunner":
-    """AgentRunner 초기화 (동기 래퍼 — asyncio.run 내에서 호출)."""
+async def _build_runner(with_rag: bool = False, collection: str = "codebase") -> "AgentRunner":
+    """AgentRunner 초기화 (비동기 — asyncio.run 내에서 await)."""
     from src.models.registry import ModelRegistry
     from src.models.pool import ModelPool
     from src.agent.dispatcher import TaskDispatcher
@@ -53,14 +50,12 @@ def _build_runner(with_rag: bool = False) -> "AgentRunner":
     obs = ObservabilityBus.get_default()
     registry = ModelRegistry()
     pool = ModelPool(registry, obs)
-
-    # initialize() 는 async — 여기서 별도 루프로 실행
-    asyncio.get_event_loop().run_until_complete(pool.initialize())
+    await pool.initialize()
 
     memory = MemoryManager()
     memory.load_session()  # 이전 세션 복원
 
-    rag = RAGPipeline() if with_rag else None
+    rag = RAGPipeline(collection_name=collection) if with_rag else None
     ctx = ContextBuilder(memory=memory, rag=rag, system_prompt=settings.SYSTEM_PROMPT)
 
     tools = ToolRegistry(obs)
@@ -87,7 +82,7 @@ def chat(
     """일반 대화 모드."""
 
     async def _run() -> None:
-        runner = _build_runner()
+        runner = await _build_runner()
         if no_stream:
             result = await runner.run(message, session=session)
             console.print(result)
@@ -127,7 +122,7 @@ def code(
         raise typer.Exit(1)
 
     async def _run() -> None:
-        runner = _build_runner(with_rag=False)
+        runner = await _build_runner(with_rag=False)
         console.print()
         await runner.run(
             prompt,
@@ -149,6 +144,7 @@ def code(
 @app.command()
 def index(
     path: Path = typer.Argument(..., help="인덱싱할 디렉토리 경로"),
+    collection: str = typer.Option("codebase", "--collection", "-c", help="ChromaDB 컬렉션명 (프로젝트별 격리)"),
 ) -> None:
     """코드베이스를 벡터 DB에 인덱싱."""
     if not path.exists():
@@ -157,9 +153,9 @@ def index(
 
     from src.rag.pipeline import RAGPipeline
 
-    console.print(f"[bold]인덱싱 시작:[/bold] {path}")
+    console.print(f"[bold]인덱싱 시작:[/bold] {path}  [dim](collection: {collection})[/dim]")
     with console.status("[green]인덱싱 중...[/green]"):
-        rag = RAGPipeline()
+        rag = RAGPipeline(collection_name=collection)
         count = rag.index_codebase(str(path))
     console.print(f"[green]완료:[/green] {count}개 청크 인덱싱됨")
 

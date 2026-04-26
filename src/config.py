@@ -86,17 +86,6 @@ class Settings:
         })
         return presets.get(model_name, defaults)
 
-    def get_profile_model(self, purpose: str, ram_gb: float) -> str:
-        """RAM 프로파일에 따른 모델 선택."""
-        profile_key = "ram_16gb" if ram_gb >= 14 else "ram_8gb"
-        profiles: dict = self._models_config.get("profiles", {})
-        defaults_map: dict = self._models_config.get("defaults", {})
-        return (
-            profiles.get(profile_key, {}).get(purpose)
-            or defaults_map.get(purpose)
-            or self.DEFAULT_MODEL
-        )
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

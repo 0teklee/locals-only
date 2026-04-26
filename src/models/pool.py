@@ -86,5 +86,3 @@ class ModelPool:
             await self.initialize()
         return await self._slots["embed"].adapter.embed(texts)
 
-    def get_adapter(self, slot_key: str) -> OllamaAdapter | None:
-        return self._slots.get(slot_key, None) and self._slots[slot_key].adapter

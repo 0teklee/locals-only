@@ -11,8 +11,13 @@ from src.config import settings
 
 
 class RAGPipeline:
-    def __init__(self, embed_model: str | None = None) -> None:
+    def __init__(
+        self,
+        embed_model: str | None = None,
+        collection_name: str = "codebase",
+    ) -> None:
         self._embed_model = embed_model or settings.EMBED_MODEL
+        self._collection_name = collection_name
         self._embeddings = None
         self._vectordb = None
         self._initialized = False
@@ -29,7 +34,7 @@ class RAGPipeline:
                 base_url=settings.OLLAMA_HOST,
             )
             self._vectordb = Chroma(
-                collection_name="codebase",
+                collection_name=self._collection_name,
                 embedding_function=self._embeddings,
                 persist_directory=settings.CHROMA_PATH,
             )

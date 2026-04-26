@@ -6,7 +6,6 @@ ContextBuilder — 토큰 예산 기반 컨텍스트 조립.
 """
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path

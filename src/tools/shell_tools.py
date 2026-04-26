@@ -61,7 +61,6 @@ def _run_command(command: str, cwd: str = ".", timeout: int = 30) -> str:
 
 def _run_python(code: str, timeout: int = 60) -> str:
     """Python 코드 인라인 실행."""
-    import sys
     import io
     import contextlib
 
